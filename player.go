@@ -1,28 +1,28 @@
 package unimud
 
 import (
-	"bufio"
 	"encoding/gob"
 	"errors"
-	"fmt"
 	"os"
 	"path"
 )
 
 // A player represents a user playing the unimud Game instance.
 type player struct {
-	game   *Game
-	input  *bufio.Scanner
-	output *bufio.Writer
-	login  string
+	*conn
+	game       *Game
+	resumeChan chan bool
+	login      string
+	properties map[string]string // all known player properties
 }
 
 // Create a new player associated with the Game g.
-func newPlayer(g *Game) *player {
+func newPlayer(g *Game, c *conn) *player {
 	return &player{
-		game:   g,
-		input:  bufio.NewScanner(os.Stdin),
-		output: bufio.NewWriter(os.Stdout),
+		conn:       c,
+		game:       g,
+		resumeChan: make(chan bool),
+		properties: make(map[string]string),
 	}
 }
 
@@ -32,43 +32,42 @@ type playerState func(p *player) playerState
 
 // run launches the player's state machine.
 func (p *player) run() {
+	p.resume()
+	defer p.yield()
+
+	p.game.playerAdd(p)
+
 	state := (*player).stateLogin
 	for state != nil {
 		state = state(p)
 	}
-}
 
-// Print outputs arguments to the player's output writer
-// without appending a trailing carriage return.
-func (p *player) Print(args ...interface{}) {
-	fmt.Fprint(p.output, args...)
-	p.output.Flush()
-}
-
-// Println outputs arguments to the player's output writer
-// and appends a trailing carriage return.
-func (p *player) Println(args ...interface{}) {
-	fmt.Fprintln(p.output, args...)
-	p.output.Flush()
-}
-
-// Printf outputs a printf-formatted string to the player's
-// output writer.
-func (p *player) Printf(format string, args ...interface{}) {
-	fmt.Fprintf(p.output, format, args...)
-	p.output.Flush()
+	p.game.playerRemove(p)
 }
 
 // GetLine reads a CR-terminated line of text from the
 // player's input reader. It returns an error if the read
 // fails.
 func (p *player) GetLine() (line string, err error) {
-	p.output.Flush()
-	if p.input.Scan() {
-		line = p.input.Text()
+	p.yield()
+	defer p.resume()
+
+	p.Flush()
+	if p.conn.input.Scan() {
+		line = p.conn.input.Text()
 		return line, nil
 	}
-	return "", p.input.Err()
+
+	return "", p.conn.input.Err()
+}
+
+func (p *player) yield() {
+	p.game.yieldChan <- true
+}
+
+func (p *player) resume() {
+	p.game.resumeReqChan <- p.resumeChan
+	<-p.resumeChan
 }
 
 // stateLogin handles player I/O when the player is in
@@ -98,8 +97,7 @@ func (p *player) stateLogin() playerState {
 	// Attempt to load the player from disk (or db).
 	p.login = login
 	if err := p.load(); err != nil {
-		// TODO: go to create new player state
-		return nil
+		return (*player).stateCreateNew
 	}
 
 	// Request the password
@@ -109,11 +107,64 @@ func (p *player) stateLogin() playerState {
 		return nil
 	}
 
-	// TODO: Check the password
-	_ = pw
+	// Check the password
+	if pw != p.properties["pw"] {
+		p.Println("incorrect password.")
+		return (*player).stateLogin
+	}
 
-	// TODO: If valid, return the playing-game state func
-	return nil
+	return (*player).stateEnteringGame
+}
+
+func (p *player) stateCreateNew() playerState {
+	p.Print("enter password: ")
+	pw, err := p.GetLine()
+	if err != nil {
+		return nil
+	}
+
+	if len(pw) < 4 {
+		p.Println("password too short.")
+		return (*player).stateLogin
+	}
+
+	p.Print("re-enter password: ")
+	rpw, err := p.GetLine()
+	if err != nil {
+		return nil
+	}
+
+	if pw != rpw {
+		p.Println("passwords don't match.")
+		return (*player).stateLogin
+	}
+
+	p.properties["pw"] = pw
+
+	if err := p.save(); err != nil {
+		p.Println("error: player couldn't be saved.", err)
+		return nil
+	}
+
+	return (*player).stateEnteringGame
+}
+
+func (p *player) stateEnteringGame() playerState {
+	return (*player).statePlaying
+}
+
+func (p *player) statePlaying() playerState {
+	p.Print("> ")
+	line, err := p.GetLine()
+	if err != nil {
+		return nil
+	}
+
+	if line == "quit" {
+		return nil
+	}
+
+	return (*player).statePlaying
 }
 
 // validateLogin checks a login id string for invalid
@@ -129,6 +180,26 @@ func validateLogin(login string) bool {
 		return false
 	}
 	return true
+}
+
+func (p *player) save() error {
+	filename := path.Join("players", p.login+".dat")
+	f, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	enc := gob.NewEncoder(f)
+
+	if err := enc.Encode(p.login); err != nil {
+		return err
+	}
+	if err := enc.Encode(p.properties); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // load reads the player's data from disk and returns
@@ -151,7 +222,9 @@ func (p *player) load() error {
 		return errors.New("player: login id mismatch")
 	}
 
-	// TODO: Decode the rest of the player's data
+	if err := dec.Decode(&p.properties); err != nil {
+		return err
+	}
 
 	return nil
 }
