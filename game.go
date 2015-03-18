@@ -10,9 +10,9 @@ import (
 
 // A Game is an instance of a uniMUD game.
 type Game struct {
-	DoneChan      chan bool
-	yieldChan     chan bool
-	resumeReqChan chan chan bool
+	DoneChan      chan bool      // used to signal that the game's Run goroutine has ended
+	yieldChan     chan bool      // used to yield control to game Run goroutine
+	resumeReqChan chan chan bool // used to request resumption of control by another goroutine
 	players       []*player      // all connected players
 	listeners     []net.Listener // tracks all known network listeners
 	listenersLock sync.Mutex     // protects the listeners slice
@@ -39,15 +39,19 @@ func (g *Game) ListenConsole() {
 // ListenNet begins listening for new player connections on
 // the specified port.
 func (g *Game) ListenNet(port int) {
+	// Start listening on the requested TCP port.
 	l, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer l.Close()
 
-	// Track the listener
+	// Track the listener.
 	g.listenerAdd(l)
 
+	// Start an infinite loop that waits for new client
+	// connections and creates players and associated goroutines
+	// as connections arrive.
 	for {
 		// Wait for a connection.
 		c, err := l.Accept()
@@ -99,16 +103,29 @@ func (g *Game) listenerRemove(l net.Listener) {
 
 // Run starts the game loop.
 func (g *Game) Run() {
+	// Create a channel that receives the current time once per second
 	clock := time.Tick(1 * time.Second)
+
+	// Infinitely loop waiting for messages on various channels.
 	for {
 		select {
-		case ch := <-g.resumeReqChan:
-			ch <- true
-			<-g.yieldChan
 
+		// Another object is requesting resumption of control
+		// from this goroutine. The channel on which resumption
+		// should be communicated is passed as data through the
+		// channel.
+		case ch := <-g.resumeReqChan:
+			ch <- true    // issue a resume signal through the passed channel.
+			<-g.yieldChan // block until the resumed goroutine yields again.
+
+		// The clock channel ticks sends the current time once per
+		// second
 		case t := <-clock:
-			log.Println(t)
+			// TODO: Handle timed events here.
+			_ = t
 		}
 	}
+
+	// Signal on the Done channel that the game has ended.
 	g.DoneChan <- true
 }

@@ -61,12 +61,21 @@ func (p *player) GetLine() (line string, err error) {
 	return "", p.conn.input.Err()
 }
 
+// yield control of the Game's state back to the game's Run
+// goroutine.
 func (p *player) yield() {
 	p.game.yieldChan <- true
 }
 
+// resume control of the Game's state by requesting it from
+// the Game's Run goroutine.
 func (p *player) resume() {
+	// On the game's "resume request" channel, send the channel
+	// on which to report resumption.
 	p.game.resumeReqChan <- p.resumeChan
+
+	// Wait until the game's Run goroutine signals resumption
+	// on our resume channel.
 	<-p.resumeChan
 }
 
@@ -116,6 +125,8 @@ func (p *player) stateLogin() playerState {
 	return (*player).stateEnteringGame
 }
 
+// stateCreateNew handles the creation of new player
+// account data.
 func (p *player) stateCreateNew() playerState {
 	p.Print("enter password: ")
 	pw, err := p.GetLine()
@@ -142,17 +153,21 @@ func (p *player) stateCreateNew() playerState {
 	p.properties["pw"] = pw
 
 	if err := p.save(); err != nil {
-		p.Println("error: player couldn't be saved.", err)
+		p.Println("error: player couldn't be saved.")
 		return nil
 	}
 
 	return (*player).stateEnteringGame
 }
 
+// stateEnteringGame is a transitional state that is
+// entered just before the player starts playing the game.
 func (p *player) stateEnteringGame() playerState {
 	return (*player).statePlaying
 }
 
+// statePlaying is the state a player enters while playing
+// the game itself.
 func (p *player) statePlaying() playerState {
 	p.Print("> ")
 	line, err := p.GetLine()
@@ -182,6 +197,8 @@ func validateLogin(login string) bool {
 	return true
 }
 
+// save stores the player's data to disk and returns an
+// error if the save fails.
 func (p *player) save() error {
 	filename := path.Join("players", p.login+".dat")
 	f, err := os.Create(filename)
