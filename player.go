@@ -52,6 +52,13 @@ func (p *player) Println(args ...interface{}) {
 	p.output.Flush()
 }
 
+// Printf outputs a printf-formatted string to the player's
+// output writer.
+func (p *player) Printf(format string, args ...interface{}) {
+	fmt.Fprintf(p.output, format, args...)
+	p.output.Flush()
+}
+
 // GetLine reads a CR-terminated line of text from the
 // player's input reader. It returns an error if the read
 // fails.
@@ -61,7 +68,7 @@ func (p *player) GetLine() (line string, err error) {
 		line = p.input.Text()
 		return line, nil
 	}
-	return "", errors.New("player: disconnected")
+	return "", p.input.Err()
 }
 
 // stateLogin handles player I/O when the player is in
@@ -73,7 +80,10 @@ func (p *player) stateLogin() playerState {
 		return nil
 	}
 
+	// Check for invalid login id
 	switch {
+	case len(login) == 0:
+		return (*player).stateLogin
 	case len(login) < 4:
 		p.Println("login id is too short.")
 		return (*player).stateLogin
@@ -85,21 +95,23 @@ func (p *player) stateLogin() playerState {
 		return (*player).stateLogin
 	}
 
+	// Attempt to load the player from disk (or db).
 	p.login = login
 	if err := p.load(); err != nil {
 		// TODO: go to create new player state
 		return nil
 	}
 
+	// Request the password
 	p.Print("password: ")
 	pw, err := p.GetLine()
 	if err != nil {
 		return nil
 	}
 
+	// TODO: Check the password
 	_ = pw
 
-	// TODO: Check the password
 	// TODO: If valid, return the playing-game state func
 	return nil
 }

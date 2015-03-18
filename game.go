@@ -1,7 +1,5 @@
 package unimud
 
-import "log"
-
 // A Game is an instance of a uniMUD game.
 type Game struct {
 }
@@ -17,6 +15,5 @@ func (g *Game) ListenConsole() {
 	for {
 		p := newPlayer(g)
 		p.run()
-		log.Println("Player exited")
 	}
 }
