@@ -9,10 +9,10 @@ import (
 
 // A player represents a user playing the unimud Game instance.
 type player struct {
-	*conn
-	game       *Game
-	resumeChan chan bool
-	login      string
+	*conn                        // the embedded connection used for player I/O
+	game       *Game             // the game this player is associated with
+	resumeChan chan bool         // used by game to wake up this player
+	login      string            // the player's login id
 	properties map[string]string // all known player properties
 }
 
@@ -32,32 +32,52 @@ type playerState func(p *player) playerState
 
 // run launches the player's state machine.
 func (p *player) run() {
+
+	// Start out by requesting a resumption of control
+	// from the game's Run goroutine. We must always do this
+	// before modifying shared game state.
 	p.resume()
+
+	// When the player's goroutine is no longer running,
+	// yield control back to the game's Run goroutine.
 	defer p.yield()
 
+	// Tell the game to track the player.
 	p.game.playerAdd(p)
 
+	// Stop tracking the player once this function exits.
+	defer p.game.playerRemove(p)
+
+	// Run the player's state machine.
 	state := (*player).stateLogin
 	for state != nil {
 		state = state(p)
 	}
-
-	p.game.playerRemove(p)
 }
 
 // GetLine reads a CR-terminated line of text from the
 // player's input reader. It returns an error if the read
 // fails.
 func (p *player) GetLine() (line string, err error) {
+	// While reading input from the player, yield control
+	// to the game's Run goroutine. There's nothing the
+	// player can do to update the global game state while
+	// input is being received, so this is an ideal time
+	// to yield.
 	p.yield()
+
+	// Request a resumption of control from the game's Run
+	// goroutine once the player hits the enter key.
 	defer p.resume()
 
+	// Read a single line of input (up to the CR).
 	p.Flush()
 	if p.conn.input.Scan() {
 		line = p.conn.input.Text()
 		return line, nil
 	}
 
+	// Something bad happened (probably a disconnect).
 	return "", p.conn.input.Err()
 }
 
