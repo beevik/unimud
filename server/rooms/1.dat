@@ -1,0 +1,11 @@
+{
+    "Description": "You're on a long and winding path.",
+    "Exits": [
+        {
+            "ID": 0,
+            "Name": "south"
+        }
+    ],
+    "ID": 1,
+    "Name": "Path away from Starting Room"
+}

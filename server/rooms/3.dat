@@ -1,0 +1,11 @@
+{
+    "Name": "Dead End",
+    "Description": "You're at a dead end.",
+    "Exits": [
+        {
+            "ID": 2,
+            "Name": "west"
+        }
+    ],
+    "ID": 3
+}

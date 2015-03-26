@@ -1,0 +1,15 @@
+{
+    "Description": "Welcome to the starting room of UniMUD.",
+    "Exits": [
+        {
+            "ID": 1,
+            "Name": "north"
+        },
+        {
+            "ID": 2,
+            "Name": "east"
+        }
+    ],
+    "ID": 0,
+    "Name": "Starter Room"
+}

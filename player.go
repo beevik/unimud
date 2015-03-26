@@ -5,15 +5,20 @@ import (
 	"errors"
 	"os"
 	"path"
+	"strings"
+
+	"github.com/beevik/prefixtree"
 )
 
 // A player represents a user playing the unimud Game instance.
 type player struct {
-	*conn                        // the embedded connection used for player I/O
-	game       *Game             // the game this player is associated with
-	resumeChan chan bool         // used by game to wake up this player
-	login      string            // the player's login id
-	properties map[string]string // all known player properties
+	*conn                             // the embedded connection used for player I/O
+	game       *Game                  // the game this player is associated with
+	resumeChan chan bool              // used by game to wake up this player
+	login      string                 // the player's login id
+	properties map[string]interface{} // all known player properties
+	entered    bool                   // tracks whether the player has entered the game
+	room       *room                  // the room the player is currently in
 }
 
 // Create a new player associated with the Game g.
@@ -22,7 +27,7 @@ func newPlayer(g *Game, c *conn) *player {
 		conn:       c,
 		game:       g,
 		resumeChan: make(chan bool),
-		properties: make(map[string]string),
+		properties: make(map[string]interface{}),
 	}
 }
 
@@ -42,17 +47,32 @@ func (p *player) run() {
 	// yield control back to the game's Run goroutine.
 	defer p.yield()
 
-	// Tell the game to track the player.
-	p.game.playerAdd(p)
+	p.enterGame()
 
-	// Stop tracking the player once this function exits.
-	defer p.game.playerRemove(p)
-
-	// Run the player's state machine.
+	// Run the player's state machine until state becomes nil.
 	state := (*player).stateLogin
 	for state != nil {
 		state = state(p)
 	}
+
+	p.leaveGame()
+}
+
+func (p *player) enterGame() {
+	p.game.playerAdd(p)
+}
+
+func (p *player) leaveGame() {
+	p.Close()
+
+	if p.entered {
+		p.save()
+		p.room.playerLeave(p)
+		p.game.playerLeave(p)
+		p.entered = false
+	}
+
+	p.game.playerRemove(p)
 }
 
 // GetLine reads a CR-terminated line of text from the
@@ -67,7 +87,8 @@ func (p *player) GetLine() (line string, err error) {
 	p.yield()
 
 	// Request a resumption of control from the game's Run
-	// goroutine once the player hits the enter key.
+	// goroutine once the player hits the enter key (or
+	// a disconnect occurs).
 	defer p.resume()
 
 	// Read a single line of input (up to the CR).
@@ -108,7 +129,7 @@ func (p *player) stateLogin() playerState {
 		return nil
 	}
 
-	// Check for invalid login id
+	// Check for an invalid login id
 	switch {
 	case len(login) == 0:
 		return (*player).stateLogin
@@ -137,8 +158,14 @@ func (p *player) stateLogin() playerState {
 	}
 
 	// Check the password
-	if pw != p.properties["pw"] {
+	if pw != p.properties["pw"].(string) {
 		p.Println("incorrect password.")
+		return (*player).stateLogin
+	}
+
+	// TODO: Check for player already logged in
+	if p.game.playerMap[p.login] != nil {
+		p.Println("A player with that login id is already logged in.")
 		return (*player).stateLogin
 	}
 
@@ -154,24 +181,32 @@ func (p *player) stateCreateNew() playerState {
 		return nil
 	}
 
-	if len(pw) < 4 {
+	// Validate password
+	switch {
+	case len(pw) < 4:
 		p.Println("password too short.")
+		return (*player).stateLogin
+	case len(pw) > 32:
+		p.Println("password too long.")
 		return (*player).stateLogin
 	}
 
+	// Confirm password
 	p.Print("re-enter password: ")
 	rpw, err := p.GetLine()
 	if err != nil {
 		return nil
 	}
-
 	if pw != rpw {
 		p.Println("passwords don't match.")
 		return (*player).stateLogin
 	}
 
+	// Initialize all new player player properties
 	p.properties["pw"] = pw
+	p.properties["room"] = 0
 
+	// Save the player
 	if err := p.save(); err != nil {
 		p.Println("error: player couldn't be saved.")
 		return nil
@@ -183,6 +218,17 @@ func (p *player) stateCreateNew() playerState {
 // stateEnteringGame is a transitional state that is
 // entered just before the player starts playing the game.
 func (p *player) stateEnteringGame() playerState {
+	// Load the player's starting room
+	roomID := p.properties["room"].(int)
+	r, err := p.game.roomGet(roomID)
+	if err != nil {
+		return (*player).stateLogin
+	}
+
+	// Enter the game world
+	p.game.playerEnter(p)
+	r.playerEnter(p)
+	r.display(p)
 	return (*player).statePlaying
 }
 
@@ -195,7 +241,36 @@ func (p *player) statePlaying() playerState {
 		return nil
 	}
 
-	if line == "quit" {
+	// Parse the command and associated arguments
+	var cmd, arg string
+	segments := strings.SplitN(line, " ", 2)
+	switch {
+	case len(segments) == 1:
+		cmd, arg = segments[0], ""
+	case len(segments) == 2:
+		cmd, arg = segments[0], stripLeadingWhitespace(segments[1])
+	}
+
+	// Empty command is a no-op
+	if cmd == "" {
+		return (*player).statePlaying
+	}
+
+	// Find the command in the prefix tree
+	h, err := commands.Find(cmd)
+	switch {
+	case err == prefixtree.ErrPrefixNotFound:
+		p.Println("command not found.")
+		return (*player).statePlaying
+	case err == prefixtree.ErrPrefixAmbiguous:
+		p.Println("command ambiguous.")
+		return (*player).statePlaying
+	case h == nil:
+		return nil
+	}
+
+	// Call the command's handler
+	if err := h.(handlerFunc)(p, arg); err != nil {
 		return nil
 	}
 
@@ -215,6 +290,15 @@ func validateLogin(login string) bool {
 		return false
 	}
 	return true
+}
+
+func stripLeadingWhitespace(s string) string {
+	for i := 0; i < len(s); i++ {
+		if s[i] != ' ' && s[i] != '\t' {
+			return s[i:]
+		}
+	}
+	return ""
 }
 
 // save stores the player's data to disk and returns an

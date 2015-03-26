@@ -1,0 +1,15 @@
+{
+    "Name": "Hilltop",
+    "Description": "You're on a grassy hilltop.",
+    "Exits": [
+        {
+            "ID": 0,
+            "Name": "west"
+        },
+        {
+            "ID": 3,
+            "Name": "east"
+        }
+    ],
+    "ID": 2
+}
