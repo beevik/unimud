@@ -99,7 +99,12 @@ func (p *player) GetLine() (line string, err error) {
 	}
 
 	// Something bad happened (probably a disconnect).
-	return "", p.conn.input.Err()
+	err = p.conn.input.Err()
+	if err == nil {
+		err = errors.New("player: disconnected")
+	}
+
+	return "", err
 }
 
 // yield control of the Game's state back to the game's Run

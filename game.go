@@ -36,6 +36,7 @@ func NewGame() *Game {
 // ListenConsole listens for player input on standard input
 // and outputs text on standard output.
 func (g *Game) ListenConsole() {
+	fmt.Println("Listening on the console")
 	for {
 		p := newPlayer(g, newConnConsole())
 		p.run()
@@ -51,6 +52,8 @@ func (g *Game) ListenNet(port int) {
 		log.Fatal(err)
 	}
 	defer l.Close()
+
+	fmt.Println("Listening on port", port)
 
 	// Track the listener.
 	g.listenerAdd(l)
