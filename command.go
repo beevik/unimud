@@ -23,6 +23,7 @@ var commandList = []command{
 	{"n", (*player).cmdNorth},
 	{"north", (*player).cmdNorth},
 	{"quit", (*player).cmdQuit},
+	{"reply", (*player).cmdReply},
 	{"s", (*player).cmdSouth},
 	{"say", (*player).cmdSay},
 	{"shutdown", (*player).cmdShutdown},
@@ -82,6 +83,16 @@ func (p *player) cmdQuit(arg string) error {
 	return errors.New("player: disconnecting")
 }
 
+func (p *player) cmdReply(arg string) error {
+	name, ok := p.properties["replyto"].(string)
+	if !ok || name == "" {
+		p.Println("No one has whispered to you.")
+		return nil
+	}
+
+	return p.cmdTell(name + " " + arg)
+}
+
 func (p *player) cmdSay(arg string) error {
 	if arg == "" {
 		p.Println("Syntax: say <message>")
@@ -133,6 +144,7 @@ func (p *player) cmdTell(arg string) error {
 	default:
 		p.Printf("Message sent to %s.\n", split[0])
 		op.Printf("%s whispers, '%s'.\n", p.login, stripLeadingWhitespace(split[1]))
+		op.properties["replyto"] = p.login
 	}
 	return nil
 }
